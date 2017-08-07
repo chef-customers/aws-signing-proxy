@@ -23,6 +23,7 @@ import (
 
 var targetFlag = flag.String("target", os.Getenv("AWS_ES_TARGET"), "target url to proxy to")
 var portFlag = flag.Int("port", 8080, "listening port for proxy")
+var listenAddress = flag.String("listen-address", "", "Local address to listen on")
 var regionFlag = flag.String("region", os.Getenv("AWS_REGION"), "AWS region for credentials")
 var flushInterval = flag.Duration("flush-interval", 0, "Flush interval to flush to the client while copying the response body.")
 var idleConnTimeout = flag.Duration("idle-conn-timeout", 90*time.Second, "the maximum amount of time an idle (keep-alive) connection will remain idle before closing itself. Zero means no limit.")
@@ -158,7 +159,7 @@ func main() {
 
 	// Start the proxy server
 	proxy := NewSigningProxy(targetURL, creds, region)
-	listenString := fmt.Sprintf(":%v", *portFlag)
+	listenString := fmt.Sprintf("%s:%v", *listenAddress, *portFlag)
 	fmt.Printf("Listening on %v\n", listenString)
 	http.ListenAndServe(listenString, proxy)
 }
