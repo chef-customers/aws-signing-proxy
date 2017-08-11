@@ -19,16 +19,31 @@ import (
 	"github.com/aws/aws-sdk-go/aws/defaults"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/signer/v4"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
 
 var targetFlag = flag.String("target", os.Getenv("AWS_ES_TARGET"), "target url to proxy to")
 var portFlag = flag.Int("port", 8080, "listening port for proxy")
 var listenAddress = flag.String("listen-address", "", "Local address to listen on")
 var regionFlag = flag.String("region", os.Getenv("AWS_REGION"), "AWS region for credentials")
-var flushInterval = flag.Duration("flush-interval", 0, "Flush interval to flush to the client while copying the response body.")
-var idleConnTimeout = flag.Duration("idle-conn-timeout", 90*time.Second, "the maximum amount of time an idle (keep-alive) connection will remain idle before closing itself. Zero means no limit.")
-var dialTimeout = flag.Duration("dial-timeout", 30*time.Second, "The maximum amount of time a dial will wait for a connect to complete.")
-var dialKeepAlive = flag.Duration("dial-keep-alive", 30*time.Second, "The amount of time a dial will keep a connection alive for.")
+var flushInterval = flag.Int("flush-interval", 0, "Flush interval to flush to the client while copying the response body.")
+var idleConnTimeout = flag.Int("idle-conn-timeout", 90, "the maximum amount of time an idle (keep-alive) connection will remain idle before closing itself. Zero means no limit.")
+var dialTimeout = flag.Int("dial-timeout", 30, "The maximum amount of time a dial will wait for a connect to complete.")
+var dialKeepAlive = flag.Int("dial-keep-alive", 30, "The amount of time a dial will keep a connection alive for.")
+
+type configuration struct {
+	Target          string `mapstructure:"target"`
+	Port            int    `mapstructure:"port"`
+	ListenAddress   string `mapstructure:"listen-address"`
+	Region          string `mapstructure:"region"`
+	FlushInterval   int    `mapstructure:"flush-interval"`
+	IdleConnTimeout int    `mapstructure:"idle-conn-timeout"`
+	DialTimeout     int    `mapstructure:"dial-timeout"`
+	DialKeepAlive   int    `mapstructure:"dial-keep-alive"`
+}
+
+var config configuration
 
 // NewSigningProxy proxies requests to AWS services which require URL signing using the provided credentials
 func NewSigningProxy(target *url.URL, creds *credentials.Credentials, region string) *httputil.ReverseProxy {
@@ -105,40 +120,73 @@ func NewSigningProxy(target *url.URL, creds *credentials.Credentials, region str
 		}
 	}
 
+	// Convert config ints to duration
+	dialerTimeout := time.Duration(config.DialTimeout) * time.Second
+	dialerKeepAlive := time.Duration(config.DialKeepAlive) * time.Second
+	idleTimeout := time.Duration(config.IdleConnTimeout) * time.Second
+	flushInter := time.Duration(config.FlushInterval) * time.Second
+
 	// transport is http.DefaultTransport but with the ability to override some
 	// timeouts
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
-			Timeout:   *dialTimeout,
-			KeepAlive: *dialKeepAlive,
+			Timeout:   dialerTimeout,
+			KeepAlive: dialerKeepAlive,
 			DualStack: true,
 		}).DialContext,
 		MaxIdleConns:        100,
-		IdleConnTimeout:     *idleConnTimeout,
+		IdleConnTimeout:     idleTimeout,
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
 
 	return &httputil.ReverseProxy{
 		Director:      director,
-		FlushInterval: *flushInterval,
+		FlushInterval: flushInter,
 		Transport:     transport,
 	}
 }
 
 func main() {
-	flag.Parse()
+	// Translate stdlib flags into pflags
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	pflag.Parse()
+	viper.BindPFlags(pflag.CommandLine)
 
-	// Validate target URL
-	if len(*targetFlag) == 0 {
-		fmt.Println("Requires target URL to proxy to. Please use the -target flag")
+	// Viper defaults
+	viper.SetDefault("region", "us-west-2")
+
+	// Bind ENV vars
+	viper.BindEnv("region", "AWS_REGION")
+
+	// Viper setup
+	viper.SetConfigName("aws-signing-proxy")
+	viper.AddConfigPath("/etc/")
+	viper.AddConfigPath(".")
+	viper.ReadInConfig()
+
+	// Unpack config values into config struct
+	err := viper.Unmarshal(&config)
+	if err != nil {
+		fmt.Println("Could not decode config!")
 		return
 	}
-	targetURL, err := url.Parse(*targetFlag)
+
+	if config.Target == "" {
+		fmt.Println("No proxy target set. Please set this either in the config file or using the --target flag")
+		return
+	}
+
+	// Validate URL
+	targetURL, err := url.Parse(config.Target)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+
+	// Set listen-address and port
+	listenAddress := config.ListenAddress
+	port := config.Port
 
 	// Get credentials:
 	// Environment variables > local aws config file > remote role provider
@@ -152,14 +200,11 @@ func main() {
 
 	// Region order of precident:
 	// regionFlag > os.Getenv("AWS_REGION") > "us-west-2"
-	region := *regionFlag
-	if len(region) == 0 {
-		region = "us-west-2"
-	}
+	region := config.Region
 
 	// Start the proxy server
 	proxy := NewSigningProxy(targetURL, creds, region)
-	listenString := fmt.Sprintf("%s:%v", *listenAddress, *portFlag)
+	listenString := fmt.Sprintf("%s:%v", listenAddress, port)
 	fmt.Printf("Listening on %v\n", listenString)
 	http.ListenAndServe(listenString, proxy)
 }
