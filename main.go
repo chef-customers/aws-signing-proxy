@@ -2,10 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,6 +21,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws/signer/v4"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var targetFlag = flag.String("target", os.Getenv("AWS_ES_TARGET"), "target url to proxy to")
@@ -31,6 +34,7 @@ var flushInterval = flag.Int("flush-interval", 0, "Flush interval to flush to th
 var idleConnTimeout = flag.Int("idle-conn-timeout", 90, "the maximum amount of time an idle (keep-alive) connection will remain idle before closing itself. Zero means no limit.")
 var dialTimeout = flag.Int("dial-timeout", 30, "The maximum amount of time a dial will wait for a connect to complete.")
 var dialKeepAlive = flag.Int("dial-keep-alive", 30, "The amount of time a dial will keep a connection alive for.")
+var logLevel = flag.String("log-level", "info", "Log level.  Default is info.  May also be set to 'debug'.")
 
 type configuration struct {
 	Target          string `mapstructure:"target"`
@@ -41,13 +45,19 @@ type configuration struct {
 	IdleConnTimeout int    `mapstructure:"idle-conn-timeout"`
 	DialTimeout     int    `mapstructure:"dial-timeout"`
 	DialKeepAlive   int    `mapstructure:"dial-keep-alive"`
+	LogLevel        string `mapstructure:"log-level"`
 }
 
 var config configuration
+var logger *zap.Logger
+var sugar *zap.SugaredLogger
+var requestCount int
 
 // NewSigningProxy proxies requests to AWS services which require URL signing using the provided credentials
 func NewSigningProxy(target *url.URL, creds *credentials.Credentials, region string) *httputil.ReverseProxy {
 	director := func(req *http.Request) {
+		// Bump the request count
+		requestCount++
 		// Rewrite request to desired server host
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
@@ -94,7 +104,7 @@ func NewSigningProxy(target *url.URL, creds *credentials.Credentials, region str
 		if req.Body != nil {
 			buf, err := ioutil.ReadAll(req.Body)
 			if err != nil {
-				log.Printf("error reading request body: %v\n", err)
+				sugar.Infof("error reading request body: %v", err)
 			}
 			req.Body = ioutil.NopCloser(bytes.NewBuffer(buf))
 
@@ -104,6 +114,7 @@ func NewSigningProxy(target *url.URL, creds *credentials.Credentials, region str
 		// Use the updated req.URL for creating the signed request
 		// We pass the full URL object to include Host, Scheme, and any params
 		awsReq.HTTPRequest.URL = req.URL
+		sugar.Debugf("Issuing request to: %s", req.URL)
 		// These are now set above via req, but it's imperative that this remains
 		//  correctly set before calling .Sign()
 		//awsReq.HTTPRequest.URL.Scheme = target.Scheme
@@ -111,13 +122,15 @@ func NewSigningProxy(target *url.URL, creds *credentials.Credentials, region str
 
 		// Perform the signing, updating awsReq in place
 		if err := awsReq.Sign(); err != nil {
-			log.Printf("error signing: %v\n", err)
+			sugar.Infof("error signing: %v", err)
 		}
 
 		// Write the Signed Headers into the Original Request
 		for k, v := range awsReq.HTTPRequest.Header {
 			req.Header[k] = v
 		}
+		sugar.Debugf("Headers: %v", req.Header)
+		sugar.Debugf("Body: %v", req.Body)
 	}
 
 	// Convert config ints to duration
@@ -172,6 +185,50 @@ func main() {
 		return
 	}
 
+	// Setup logger
+	rawJSON := []byte(`{
+	  "level": "info",
+	  "encoding": "json",
+	  "encoderConfig": {
+	    "messageKey": "message",
+	    "timeKey": "time",
+	    "levelKey": "level",
+	    "levelEncoder": "lowercase",
+	    "timeEncoder": "iso8601"
+	  }
+	}`)
+	var loggerConfig zap.Config
+	var level zap.AtomicLevel
+
+	if err := json.Unmarshal(rawJSON, &loggerConfig); err != nil {
+		panic(err)
+	}
+	if config.LogLevel == "debug" {
+		level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+	} else {
+		level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+	}
+
+	// Setup lumberjack for rotation
+	w := zapcore.AddSync(&lumberjack.Logger{
+		Filename:   "/var/log/aws-signing-proxy/proxy.log",
+		MaxSize:    100,
+		MaxBackups: 3,
+	})
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(loggerConfig.EncoderConfig),
+		w,
+		level,
+	)
+	logger := zap.New(core)
+	if err != nil {
+		panic(err)
+	}
+	defer logger.Sync()
+	sugar = logger.Sugar()
+
+	sugar.Infow("Service starting...")
+
 	if config.Target == "" {
 		fmt.Println("No proxy target set. Please set this either in the config file or using the --target flag")
 		return
@@ -205,6 +262,15 @@ func main() {
 	// Start the proxy server
 	proxy := NewSigningProxy(targetURL, creds, region)
 	listenString := fmt.Sprintf("%s:%v", listenAddress, port)
-	fmt.Printf("Listening on %v\n", listenString)
+	sugar.Infof("Listening on %v", listenString)
+	go statusLogging(sugar)
 	http.ListenAndServe(listenString, proxy)
+}
+
+func statusLogging(logger *zap.SugaredLogger) {
+	for {
+		logger.Infof("Requests made in last 60 seconds: %v", requestCount)
+		requestCount = 0
+		time.Sleep(60 * time.Second)
+	}
 }
