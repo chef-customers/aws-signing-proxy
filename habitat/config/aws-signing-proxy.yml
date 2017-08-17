@@ -1,0 +1,4 @@
+listen-address: {{cfg.listen_address}}
+port: {{cfg.port}}
+target: {{cfg.target}}
+region: {{cfg.region}}
