@@ -1,0 +1,7 @@
+#!/bin/sh
+
+exec 2>&1
+
+cd {{pkg.svc_config_path}}
+
+exec aws-signing-proxy
