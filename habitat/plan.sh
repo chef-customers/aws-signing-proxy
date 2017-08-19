@@ -1,6 +1,6 @@
 pkg_name=aws-signing-proxy
 pkg_origin=irvingpop
-pkg_version="0.3.0"
+pkg_version="0.2.0"
 pkg_maintainer="The Chef Automate Maintainers <support@chef.io>"
 pkg_license=('MIT')
 pkg_source="https://github.com/nsdavidson/aws-signing-proxy.git"
@@ -12,14 +12,11 @@ pkg_build_deps=(
 )
 pkg_bin_dirs=(bin)
 pkg_exports=(
-  [port]=port
+  [http-port]=port
 )
-pkg_exposes=(port)
+pkg_exposes=(http-port)
 pkg_description="AWS Signing Proxy for ElasticSearch"
 pkg_upstream_url="https://github.com/nsdavidson/aws-signing-proxy"
-# pkg_binds_optional=(
-#   [elasticsearch]="http-port"
-# )
 
 do_clean() {
   return 0
@@ -27,7 +24,7 @@ do_clean() {
 
 do_download() {
   rm -rf "$CACHE_PATH"
-  git clone "$pkg_source" "$CACHE_PATH" --depth 1
+  git clone "$pkg_source" "$CACHE_PATH" --depth 1 --branch "v$pkg_version"
 }
 
 do_verify() {
