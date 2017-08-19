@@ -35,6 +35,8 @@ var idleConnTimeout = flag.Int("idle-conn-timeout", 90, "the maximum amount of t
 var dialTimeout = flag.Int("dial-timeout", 30, "The maximum amount of time a dial will wait for a connect to complete.")
 var dialKeepAlive = flag.Int("dial-keep-alive", 30, "The amount of time a dial will keep a connection alive for.")
 var logLevel = flag.String("log-level", "info", "Log level.  Default is info.  May also be set to 'debug'.")
+var logLocation = flag.String("log-location", "/var/log/aws-signing-proxy", "The location to write the log file to.")
+var configLocation = flag.String("config-location", "/etc", "The location of the aws-signing-proxy.")
 
 type configuration struct {
 	Target          string `mapstructure:"target"`
@@ -46,6 +48,7 @@ type configuration struct {
 	DialTimeout     int    `mapstructure:"dial-timeout"`
 	DialKeepAlive   int    `mapstructure:"dial-keep-alive"`
 	LogLevel        string `mapstructure:"log-level"`
+	LogLocation     string `mapstructure:"log-location"`
 }
 
 var config configuration
@@ -174,7 +177,7 @@ func main() {
 
 	// Viper setup
 	viper.SetConfigName("aws-signing-proxy")
-	viper.AddConfigPath("/etc/")
+	viper.AddConfigPath(*configLocation)
 	viper.AddConfigPath(".")
 	viper.ReadInConfig()
 
@@ -211,7 +214,7 @@ func main() {
 
 	// Setup lumberjack for rotation
 	w := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   "/var/log/aws-signing-proxy/proxy.log",
+		Filename:   config.LogLocation + "/proxy.log",
 		MaxSize:    100,
 		MaxBackups: 3,
 	})
