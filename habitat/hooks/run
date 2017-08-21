@@ -4,4 +4,4 @@ exec 2>&1
 
 cd {{pkg.svc_config_path}}
 
-exec aws-signing-proxy
+exec aws-signing-proxy --config-location {{pkg.svc_config_path}}
