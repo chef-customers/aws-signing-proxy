@@ -34,9 +34,11 @@ var flushInterval = flag.Int("flush-interval", 0, "Flush interval to flush to th
 var idleConnTimeout = flag.Int("idle-conn-timeout", 90, "the maximum amount of time an idle (keep-alive) connection will remain idle before closing itself. Zero means no limit.")
 var dialTimeout = flag.Int("dial-timeout", 30, "The maximum amount of time a dial will wait for a connect to complete.")
 var dialKeepAlive = flag.Int("dial-keep-alive", 30, "The amount of time a dial will keep a connection alive for.")
+var fileLog = flag.Bool("no-file-log", false, "Do not send log output to file.  Can be used in place of or in addition to logging to stdout.")
 var logLevel = flag.String("log-level", "info", "Log level.  Default is info.  May also be set to 'debug'.")
 var logLocation = flag.String("log-location", "/var/log/aws-signing-proxy", "The location to write the log file to.")
 var configLocation = flag.String("config-location", "/etc", "The location of the aws-signing-proxy.")
+var stdOutLog = flag.Bool("stdout-log", false, "Send log output to stdout.  Can be used in place of or in addition to the log file.")
 
 type configuration struct {
 	Target          string `mapstructure:"target"`
@@ -49,6 +51,8 @@ type configuration struct {
 	DialKeepAlive   int    `mapstructure:"dial-keep-alive"`
 	LogLevel        string `mapstructure:"log-level"`
 	LogLocation     string `mapstructure:"log-location"`
+	StdOutLog       bool   `mapstructure:"stdout-log"`
+	NoFileLog       bool   `mapstructure:"no-file-log"`
 }
 
 var config configuration
@@ -212,17 +216,32 @@ func main() {
 		level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 	}
 
-	// Setup lumberjack for rotation
-	w := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   config.LogLocation + "/proxy.log",
-		MaxSize:    100,
-		MaxBackups: 3,
-	})
-	core := zapcore.NewCore(
-		zapcore.NewJSONEncoder(loggerConfig.EncoderConfig),
-		w,
-		level,
-	)
+	// Set log outputs
+	var outputs []zapcore.Core
+	if config.StdOutLog {
+		core := zapcore.NewCore(
+			zapcore.NewJSONEncoder(loggerConfig.EncoderConfig),
+			zapcore.Lock(os.Stdout),
+			level,
+		)
+		outputs = append(outputs, core)
+	}
+
+	if !config.NoFileLog {
+		// Setup lumberjack for rotation
+		w := zapcore.AddSync(&lumberjack.Logger{
+			Filename:   config.LogLocation + "/proxy.log",
+			MaxSize:    100,
+			MaxBackups: 3,
+		})
+		core := zapcore.NewCore(
+			zapcore.NewJSONEncoder(loggerConfig.EncoderConfig),
+			w,
+			level,
+		)
+		outputs = append(outputs, core)
+	}
+	core := zapcore.NewTee(outputs...)
 	logger := zap.New(core)
 	if err != nil {
 		panic(err)
