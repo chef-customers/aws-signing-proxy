@@ -2,5 +2,6 @@ listen_address = "0.0.0.0"
 port = 9200
 target = "http://myawsservice.amazonaws.com"
 region = "us-east-1"
-filelog = false
+log-level = "info"
+no-file-log = true
 stdout-log = true

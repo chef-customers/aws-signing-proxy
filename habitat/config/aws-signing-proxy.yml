@@ -2,5 +2,5 @@ listen-address: {{cfg.listen_address}}
 port: {{cfg.port}}
 target: {{cfg.target}}
 region: {{cfg.region}}
-no-file-log: {{cfg.filelog}}
-stdout-log: {{cfg.stdoutlog}}
+no-file-log: {{cfg.no-file-log}}
+stdout-log: {{cfg.stdout-log}}
